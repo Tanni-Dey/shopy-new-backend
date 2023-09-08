@@ -197,6 +197,13 @@ const run = async () => {
       res.send(findUser);
     });
 
+    //post user api
+    app.post("/add-user", async (req, res) => {
+      const newUser = req.body;
+      const user = await userCollection.insertOne(newUser);
+      res.send(user);
+    });
+
     //--------------order api---------------
 
     //add order api
