@@ -1,12 +1,15 @@
 import { MongoClient, ObjectId, ServerApiVersion } from "mongodb";
 import express from "express";
 import cors from "cors";
+import onlyStripe from "stripe";
+import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 5000;
+const stripe = onlyStripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors());
 app.use(express.json());
@@ -20,15 +23,32 @@ const client = new MongoClient(uri, {
   serverApi: ServerApiVersion.v1,
 });
 
+//verify jwt
+function verifyJwt(req, res, next) {
+  const autheader = req.headers.authorization;
+  if (!autheader) {
+    return res.status(401).send({ message: "Unauthorized Access" });
+  }
+  const token = autheader.split(" ")[1];
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, function (err, decoded) {
+    if (err) {
+      return res.status(403).send({ message: "Forbiden Access" });
+    }
+    req.decoded = decoded;
+    next();
+  });
+}
+
 //database connect function
 const run = async () => {
   try {
-    // await client.connect();
     const db = client.db("shopy");
 
     // all collection
     const productCollection = db.collection("products");
     const cartCollection = db.collection("carts");
+    const userCollection = db.collection("users");
+    const orderCollection = db.collection("orders");
 
     //------------------all api start-----------------
 
@@ -168,6 +188,41 @@ const run = async () => {
       res.send(allWishlistProducts);
     });
 
+    //check seller
+    app.get("/check-seller", async (req, res) => {
+      const userEmail = req.query.email;
+      const findUser = await userCollection.findOne({
+        email: userEmail,
+      });
+      res.send(findUser);
+    });
+
+    //--------------order api---------------
+
+    //add order api
+    app.post("/add-order", async (req, res) => {
+      const newOrder = req.body;
+      const order = await orderCollection.insertOne(newOrder);
+      res.send(order);
+    });
+
+    //all order by user
+    app.get("/user-orders", async (req, res) => {
+      const userEmail = req.query.email;
+      const findOrders = orderCollection.find({ user: userEmail });
+      const allOrders = await findOrders.toArray();
+      res.send(allOrders);
+    });
+
+    //single order api
+    app.get("/order/:id", async (req, res) => {
+      const id = req.params.id;
+      const singleOrder = await orderCollection.findOne({
+        _id: new ObjectId(id),
+      });
+      res.send(singleOrder);
+    });
+
     //-------manage product api-------
 
     //product approved api
@@ -197,6 +252,34 @@ const run = async () => {
         _id: new ObjectId(productId),
       });
       res.send(deletedProduct);
+    });
+
+    //---------------payment api------------
+
+    //payment create
+    app.post("/create-payment-intent", async (req, res) => {
+      const { totalAmount } = req.body;
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: totalAmount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+      res.send({ clientSecret: paymentIntent.client_secret });
+    });
+
+    //single pay to paid update api
+    app.patch("/payment/:id", async (req, res) => {
+      const id = req.params.id;
+      const payment = req.body;
+      const query = { _id: ObjectId(id) };
+      const updatePayment = {
+        $set: {
+          paid: true,
+          transId: payment.transactionid,
+        },
+      };
+      const updateOrder = await orderCollection.updateOne(query, updatePayment);
+      res.send(updateOrder);
     });
 
     //---------------------all api end--------------------
